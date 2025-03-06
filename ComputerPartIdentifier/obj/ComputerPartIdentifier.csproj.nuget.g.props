@@ -16,4 +16,7 @@
     <Import Project="$(NuGetPackageRoot)microsoft.ml\5.0.0-preview.1.25127.4\build\netstandard2.0\Microsoft.ML.props" Condition="Exists('$(NuGetPackageRoot)microsoft.ml\5.0.0-preview.1.25127.4\build\netstandard2.0\Microsoft.ML.props')" />
     <Import Project="$(NuGetPackageRoot)microsoft.ml.onnxruntime\1.20.1\build\netstandard2.1\Microsoft.ML.OnnxRuntime.props" Condition="Exists('$(NuGetPackageRoot)microsoft.ml.onnxruntime\1.20.1\build\netstandard2.1\Microsoft.ML.OnnxRuntime.props')" />
   </ImportGroup>
+  <PropertyGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <PkgTesseract_Net_SDK Condition=" '$(PkgTesseract_Net_SDK)' == '' ">C:\Users\avata\.nuget\packages\tesseract.net.sdk\4.6.411</PkgTesseract_Net_SDK>
+  </PropertyGroup>
 </Project>

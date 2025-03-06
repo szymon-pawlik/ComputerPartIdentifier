@@ -1,53 +1,91 @@
 ﻿using System;
-using System.Collections.Generic;
-using Microsoft.ML;
-using Microsoft.ML.Data;
-using Microsoft.ML.Transforms.Image;
-using Microsoft.ML.Transforms.Onnx; // Kluczowe dla ApplyOnnxModel
+using System.Drawing;
+using System.IO;
+using System.Runtime.InteropServices;
+using Tesseract;
+using Emgu.CV;
+using Emgu.CV.CvEnum;
+using Emgu.CV.Structure;
 
-public class ImageData
+namespace ComputerPartIdentifier
 {
-    public string ImagePath { get; set; }
-}
-
-public class ImagePrediction
-{
-    [ColumnName("output")]
-    public float[] Scores { get; set; }
-
-    public string PredictedLabel { get; set; }
-}
-
-class Program
-{
-    static void Main(string[] args)
+    class Program
     {
-        var context = new MLContext();
+        static void Main(string[] args)
+        {
+            string imagesFolder = Path.Combine(Directory.GetCurrentDirectory(), "images");
+            string imagePath = Path.Combine(imagesFolder, "processor.jpg");
 
-        // Ścieżka do modelu ONNX
-        var modelPath = "Models/mobilenetv2-7.onnx";
+            if (File.Exists(imagePath))
+            {
+                try
+                {
+                    Console.WriteLine("Przetwarzanie obrazu...");
+                    Mat image = CvInvoke.Imread(imagePath);
+                    Mat preprocessedImage = PreprocessImage(image);
+                    string processedImagePath = Path.Combine(imagesFolder, "processed.jpg");
+                    CvInvoke.Imwrite(processedImagePath, preprocessedImage);
+                    Console.WriteLine("Zapisano obraz przetworzony: " + processedImagePath);
 
-        // Ścieżka do zdjęcia testowego
-        var imagePath = "Data/Test/test_image.jpg";
+                    string tessdataPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tessdata");
+                    using (var engine = new TesseractEngine(tessdataPath, "eng", EngineMode.Default))
+                    using (var img = Pix.LoadFromFile(processedImagePath))
+                    using (var page = engine.Process(img))
+                    {
+                        string recognizedText = page.GetText();
+                        Console.WriteLine("Rozpoznany tekst:\n" + recognizedText);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Wystąpił błąd: " + ex.Message);
+                }
+            }
+            else
+            {
+                Console.WriteLine("Plik nie istnieje. Upewnij się, że zdjęcie jest w folderze 'images' i nazywa się 'processor.jpg'.");
+            }
+        }
 
-        // Przygotowanie danych
-        var imageData = new ImageData { ImagePath = imagePath };
-        var imageDataView = context.Data.LoadFromEnumerable(new[] { imageData });
+        static Mat PreprocessImage(Mat img)
+        {
+            Mat gray = new Mat();
+            CvInvoke.CvtColor(img, gray, ColorConversion.Bgr2Gray);
+            gray = Deskew(gray);
 
-        // Tworzenie pipeline
-        var pipeline = context.Transforms.LoadImages(outputColumnName: "input", imageFolder: "", inputColumnName: nameof(ImageData.ImagePath))
-            .Append(context.Transforms.ResizeImages(outputColumnName: "input", imageWidth: 224, imageHeight: 224, inputColumnName: "input"))
-            .Append(context.Transforms.ExtractPixels(outputColumnName: "input", interleavePixelColors: true, offsetImage: 117))
-            .Append(context.Transforms.ApplyOnnxModel(modelFile: modelPath, outputColumnNames: new[] { "output" }, inputColumnNames: new[] { "input" }));
+            CvInvoke.CLAHE(gray, 2.0, new Size(8, 8), gray);
 
-        // Trenowanie modelu (w tym przypadku to tylko transformacja danych)
-        var model = pipeline.Fit(imageDataView);
+            Mat binary = new Mat();
+            CvInvoke.AdaptiveThreshold(gray, binary, 255, AdaptiveThresholdType.GaussianC, ThresholdType.BinaryInv, 21, 5);
 
-        // Przewidywanie
-        var predictor = context.Model.CreatePredictionEngine<ImageData, ImagePrediction>(model);
-        var prediction = predictor.Predict(imageData);
+            Mat kernel = CvInvoke.GetStructuringElement(ElementShape.Rectangle, new Size(3, 3), new Point(-1, -1));
+            Mat gradient = new Mat();
+            CvInvoke.MorphologyEx(binary, gradient, MorphOp.Gradient, kernel, new Point(-1, -1), 1, BorderType.Reflect, new MCvScalar());
 
-        // Wyświetlenie wyniku
-        Console.WriteLine($"Predicted Label: {prediction.PredictedLabel}");
+            Mat cleaned = new Mat();
+            CvInvoke.MedianBlur(gradient, cleaned, 3);
+
+            return cleaned;
+        }
+
+        static Mat Deskew(Mat img)
+        {
+            Moments m = CvInvoke.Moments(img);
+            if (Math.Abs(m.Mu02) < 1e-2)
+                return img;
+
+            double skew = m.Mu11 / m.Mu02;
+
+            Mat warpMat = new Mat(2, 3, Emgu.CV.CvEnum.DepthType.Cv32F, 1);
+            float[] data = { 1, (float)skew, (float)(-0.5 * skew * img.Rows), 0, 1, 0 };
+            CvInvoke.SetIdentity(warpMat, new MCvScalar(0));
+            warpMat.SetTo(new MCvScalar(0));
+            Marshal.Copy(data, 0, warpMat.DataPointer, data.Length);
+
+            Mat deskewed = new Mat();
+            CvInvoke.WarpAffine(img, deskewed, warpMat, img.Size(), Inter.Linear, Warp.Default, new MCvScalar(255));
+
+            return deskewed;
+        }
     }
 }
